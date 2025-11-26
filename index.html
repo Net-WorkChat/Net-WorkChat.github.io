@@ -71,7 +71,7 @@
 <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, doc, addDoc, onSnapshot, collection, query, orderBy, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import { getFirestore, doc, addDoc, onSnapshot, collection, query, orderBy, serverTimestamp, setLogLevel, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
     // --- Global Variables (Provided by Canvas Environment) ---
     // Ensure safety check for global variables
@@ -90,11 +90,13 @@
     let app, db, auth;
     let userId = null;
     let currentRoomId = null;
+    let isFirebaseReady = false; // New flag to check readiness
 
     if (Object.keys(firebaseConfig).length > 0) {
         app = initializeApp(firebaseConfig);
         db = getFirestore(app);
         auth = getAuth(app);
+        isFirebaseReady = true;
 
         // 1. Authentication Setup
         onAuthStateChanged(auth, async (user) => {
@@ -118,7 +120,15 @@
             }
         });
     } else {
-        displayError("Firebase configuration is missing. Cannot start chat functionality.");
+        // --- FALLBACK FOR MISSING CONFIG ---
+        // Display a more informative and less intimidating message, and disable UI
+        document.getElementById('room-id-display').textContent = 'DATABASE UNAVAILABLE';
+        document.getElementById('user-id-value').textContent = 'Not connected';
+        document.getElementById('loading-indicator').textContent = 'Database connection details are missing. Please try again.';
+        document.getElementById('message-input').disabled = true;
+        document.getElementById('send-button').disabled = true;
+        // Optionally show an error on the bottom
+        displayError("Cannot connect to the database. Chat features are disabled.");
     }
 
     // --- Core Functions ---
@@ -167,32 +177,32 @@
     }
 
     function listenForMessages(roomId) {
+        if (!isFirebaseReady) return; // Guard clause
+
         const messagesRef = collection(db, `artifacts/${appId}/public/data/networkChats`);
 
         // Create a query that filters messages by the Room ID (Public IP)
-        // NOTE: Firestore queries often require indexes for ordering/filtering. Sorting is handled client-side for simplicity.
+        // Using 'where' to filter by roomId is required for efficient retrieval.
         const chatQuery = query(
             messagesRef,
-            // Filter by the public IP, which is stored in the 'roomId' field
-            // Use 'where' for filtering. We must rely on client-side sorting if we can't create an index.
-            // Since we can't easily set up an index for serverTimestamp/roomId combination here, we query only by roomId and sort in JS.
+            where("roomId", "==", roomId), // Filter by the public IP
+            // We still rely on client-side sorting as adding orderBy('timestamp')
+            // would require a compound index which we cannot guarantee is created.
         );
 
         onSnapshot(chatQuery, (snapshot) => {
             let messages = [];
             snapshot.forEach(doc => {
                 const data = doc.data();
-                // Client-side filtering check (redundant if using where, but safer if query index issues occur)
-                if (data.roomId === roomId) {
-                    messages.push({
-                        ...data,
-                        id: doc.id,
-                        timestamp: data.timestamp ? data.timestamp.toMillis() : Date.now()
-                    });
-                }
+                messages.push({
+                    ...data,
+                    id: doc.id,
+                    // Convert Firestore timestamp to milliseconds if available, otherwise use current time
+                    timestamp: data.timestamp ? data.timestamp.toMillis() : Date.now() 
+                });
             });
 
-            // Client-side sorting by timestamp is necessary to ensure correct order without relying on complex Firestore index requirements
+            // Client-side sorting by timestamp is necessary to ensure correct order
             messages.sort((a, b) => a.timestamp - b.timestamp);
 
             renderMessages(messages);
@@ -241,6 +251,11 @@
     }
 
     window.sendMessage = async function() {
+        if (!isFirebaseReady) {
+            displayError("Cannot send message: Database is not initialized.");
+            return;
+        }
+
         const inputElement = document.getElementById('message-input');
         const text = inputElement.value.trim();
 
