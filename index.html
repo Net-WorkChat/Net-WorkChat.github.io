@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local Network Chat</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use Inter font family -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+        }
+        /* Custom scrollbar style for the messages container */
+        .message-list::-webkit-scrollbar {
+            width: 8px;
+        }
+        .message-list::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 4px;
+        }
+        .message-list::-webkit-scrollbar-track {
+            background-color: #f1f5f9;
+        }
+    </style>
+</head>
+<body>
+
+<div id="app" class="min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white shadow-xl rounded-xl w-full max-w-2xl flex flex-col h-[90vh]">
+        <!-- Header -->
+        <header class="p-4 border-b border-gray-200 bg-gray-50 rounded-t-xl">
+            <h1 class="text-2xl font-bold text-gray-800">Local Network Chat</h1>
+            <p id="network-status" class="text-sm mt-1 text-gray-600">
+                <span class="font-medium text-blue-600">Status: </span>
+                <span id="room-id-display">Detecting network...</span>
+            </p>
+            <p id="user-id-display" class="text-xs text-gray-500 mt-0.5">
+                <span class="font-medium">Your ID: </span>
+                <span id="user-id-value">Signing in...</span>
+            </p>
+        </header>
+
+        <!-- Message List -->
+        <div id="message-list" class="message-list flex-1 overflow-y-auto p-4 space-y-4">
+            <!-- Messages will be injected here -->
+            <div id="loading-indicator" class="text-center text-gray-500 pt-8">
+                Loading chat history...
+            </div>
+        </div>
+
+        <!-- Message Input -->
+        <footer class="p-4 border-t border-gray-200 bg-gray-50 rounded-b-xl">
+            <div class="flex space-x-3">
+                <input type="text" id="message-input" placeholder="Type your message..."
+                       class="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150 shadow-sm"
+                       onkeydown="if(event.key === 'Enter') sendMessage()">
+                <button onclick="sendMessage()" id="send-button" disabled
+                        class="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-150 disabled:bg-blue-400 disabled:cursor-not-allowed">
+                    Send
+                </button>
+            </div>
+            <div id="error-message" class="text-red-500 text-sm mt-2 hidden"></div>
+        </footer>
+    </div>
+</div>
+
+<!-- Firebase Setup Script -->
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, addDoc, onSnapshot, collection, query, orderBy, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    // --- Global Variables (Provided by Canvas Environment) ---
+    // Ensure safety check for global variables
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    let firebaseConfig;
+    try {
+        firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+    } catch (e) {
+        console.error("Failed to parse firebase config:", e);
+        firebaseConfig = {};
+    }
+    const authToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+    // --- Firebase Initialization ---
+    // setLogLevel('Debug'); // Uncomment for debugging
+    let app, db, auth;
+    let userId = null;
+    let currentRoomId = null;
+
+    if (Object.keys(firebaseConfig).length > 0) {
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+
+        // 1. Authentication Setup
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                userId = user.uid;
+                document.getElementById('user-id-value').textContent = userId;
+                // 2. Once authenticated, determine the room and start the chat listener
+                await determineRoomAndListen();
+            } else {
+                // If not signed in, sign in anonymously or with custom token
+                try {
+                    if (authToken) {
+                        await signInWithCustomToken(auth, authToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    console.error("Firebase sign-in failed:", error);
+                    displayError("Authentication failed. Check console for details.");
+                }
+            }
+        });
+    } else {
+        displayError("Firebase configuration is missing. Cannot start chat functionality.");
+    }
+
+    // --- Core Functions ---
+
+    // Utility function for exponential backoff in API calls
+    async function fetchWithRetry(url, options = {}, maxRetries = 5) {
+        for (let i = 0; i < maxRetries; i++) {
+            try {
+                const response = await fetch(url, options);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                return await response.json();
+            } catch (error) {
+                console.warn(`Fetch attempt ${i + 1} failed: ${error.message}`);
+                if (i === maxRetries - 1) throw error;
+                const delay = Math.pow(2, i) * 1000; // 1s, 2s, 4s, 8s, 16s
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+
+    async function getPublicIP() {
+        try {
+            // Using ipify to get the public IP address
+            const data = await fetchWithRetry('https://api64.ipify.org?format=json', { method: 'GET' });
+            return data.ip || 'GLOBAL_LOBBY';
+        } catch (error) {
+            console.error("Failed to fetch public IP:", error);
+            displayError("Could not determine public IP. Defaulting to a global chat.");
+            return 'GLOBAL_LOBBY';
+        }
+    }
+
+    async function determineRoomAndListen() {
+        currentRoomId = await getPublicIP();
+
+        const roomIdDisplay = document.getElementById('room-id-display');
+        roomIdDisplay.textContent = currentRoomId;
+
+        // Enable the input and button
+        document.getElementById('message-input').disabled = false;
+        document.getElementById('send-button').disabled = false;
+        document.getElementById('loading-indicator').classList.add('hidden');
+
+        // Start listening to the chat room
+        listenForMessages(currentRoomId);
+    }
+
+    function listenForMessages(roomId) {
+        const messagesRef = collection(db, `artifacts/${appId}/public/data/networkChats`);
+
+        // Create a query that filters messages by the Room ID (Public IP)
+        // NOTE: Firestore queries often require indexes for ordering/filtering. Sorting is handled client-side for simplicity.
+        const chatQuery = query(
+            messagesRef,
+            // Filter by the public IP, which is stored in the 'roomId' field
+            // Use 'where' for filtering. We must rely on client-side sorting if we can't create an index.
+            // Since we can't easily set up an index for serverTimestamp/roomId combination here, we query only by roomId and sort in JS.
+        );
+
+        onSnapshot(chatQuery, (snapshot) => {
+            let messages = [];
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                // Client-side filtering check (redundant if using where, but safer if query index issues occur)
+                if (data.roomId === roomId) {
+                    messages.push({
+                        ...data,
+                        id: doc.id,
+                        timestamp: data.timestamp ? data.timestamp.toMillis() : Date.now()
+                    });
+                }
+            });
+
+            // Client-side sorting by timestamp is necessary to ensure correct order without relying on complex Firestore index requirements
+            messages.sort((a, b) => a.timestamp - b.timestamp);
+
+            renderMessages(messages);
+        }, (error) => {
+            console.error("Error listening to messages:", error);
+            displayError("Failed to load real-time messages.");
+        });
+    }
+
+    function renderMessages(messages) {
+        const list = document.getElementById('message-list');
+        list.innerHTML = ''; // Clear existing messages
+        
+        if (messages.length === 0) {
+            list.innerHTML = `<div class="text-center text-gray-500 pt-8">Be the first to send a message in this network chat!</div>`;
+            return;
+        }
+
+        messages.forEach(msg => {
+            const isSelf = msg.userId === userId;
+            const messageElement = document.createElement('div');
+            messageElement.className = `flex ${isSelf ? 'justify-end' : 'justify-start'}`;
+
+            const nameColor = isSelf ? 'text-blue-600' : 'text-purple-600';
+            const bubbleBg = isSelf ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-800';
+            const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now';
+            
+            messageElement.innerHTML = `
+                <div class="max-w-xs sm:max-w-md lg:max-w-lg">
+                    <div class="text-xs font-semibold mb-1 ${isSelf ? 'text-right' : 'text-left'}">
+                        <span class="${nameColor}">${isSelf ? 'You' : msg.userName || msg.userId.substring(0, 8) + '...'}</span>
+                    </div>
+                    <div class="py-2 px-4 rounded-xl shadow-md ${bubbleBg} break-words">
+                        ${escapeHtml(msg.text)}
+                    </div>
+                    <div class="text-xs text-gray-500 mt-1 ${isSelf ? 'text-right' : 'text-left'}">
+                        ${time}
+                    </div>
+                </div>
+            `;
+            list.appendChild(messageElement);
+        });
+
+        // Scroll to the latest message
+        list.scrollTop = list.scrollHeight;
+    }
+
+    window.sendMessage = async function() {
+        const inputElement = document.getElementById('message-input');
+        const text = inputElement.value.trim();
+
+        if (!text || !userId || !currentRoomId) {
+            return;
+        }
+
+        const message = {
+            userId: userId,
+            userName: userId.substring(0, 8), // A simple display name
+            text: text,
+            roomId: currentRoomId, // The public IP acts as the room identifier
+            timestamp: serverTimestamp() // Firebase server timestamp
+        };
+
+        try {
+            const messagesRef = collection(db, `artifacts/${appId}/public/data/networkChats`);
+            await addDoc(messagesRef, message);
+            inputElement.value = ''; // Clear input on success
+            clearError();
+        } catch (error) {
+            console.error("Error writing message:", error);
+            displayError("Failed to send message. Try again.");
+        }
+    }
+
+    function displayError(message) {
+        const errorElement = document.getElementById('error-message');
+        errorElement.textContent = message;
+        errorElement.classList.remove('hidden');
+    }
+
+    function clearError() {
+        document.getElementById('error-message').classList.add('hidden');
+    }
+
+    function escapeHtml(text) {
+        return text.replace(/&/g, "&amp;")
+                   .replace(/</g, "&lt;")
+                   .replace(/>/g, "&gt;")
+                   .replace(/"/g, "&quot;")
+                   .replace(/'/g, "&#039;");
+    }
+</script>
+
+</body>
+</html>
