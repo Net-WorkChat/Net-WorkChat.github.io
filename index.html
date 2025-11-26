@@ -24,6 +24,10 @@
         .message-list::-webkit-scrollbar-track {
             background-color: #f1f5f9;
         }
+        .tab-active {
+            border-bottom: 2px solid #f59e0b; /* Yellow-600 */
+            color: #b45309; /* Yellow-800 */
+        }
     </style>
 </head>
 <body>
@@ -43,23 +47,54 @@
             </p>
         </header>
 
-        <!-- Configuration Input (Now the Default Startup) -->
-        <div id="config-panel" class="p-4 space-y-4 bg-yellow-50 border-b border-yellow-200">
-            <p class="text-sm text-yellow-800 font-medium">To start chatting, enter a nickname and a room code!</p>
-            <div>
+        <!-- Configuration Input (Now with Tabs) -->
+        <div id="config-panel" class="p-4 bg-yellow-50 border-b border-yellow-200">
+            <!-- Tabs/Switcher -->
+            <div class="flex border-b border-yellow-200 mb-4">
+                <button id="tab-create" onclick="switchMode('create')" 
+                        class="flex-1 py-2 font-semibold text-sm text-yellow-800 transition duration-150 bg-yellow-100 hover:bg-yellow-200 rounded-t-lg">
+                    Create New Room
+                </button>
+                <button id="tab-join" onclick="switchMode('join')" 
+                        class="flex-1 py-2 font-semibold text-sm text-yellow-600 transition duration-150 hover:bg-yellow-200 rounded-t-lg">
+                    Join Existing Room
+                </button>
+            </div>
+            
+            <p class="text-sm text-yellow-800 font-medium mb-4">To start chatting, enter a nickname and your room code!</p>
+            
+            <!-- Nickname Input (Shared) -->
+            <div class="mb-4">
                 <label for="nickname-input" class="block text-sm font-medium text-gray-700">Your Nickname:</label>
                 <input type="text" id="nickname-input" placeholder="e.g., ChatMaster24" value=""
                        class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:ring-yellow-500 focus:border-yellow-500 shadow-sm">
             </div>
-            <div>
-                <label for="manual-room-key-input" class="block text-sm font-medium text-gray-700">Shared Secret Key (Short Room Code):</label>
-                <input type="text" id="manual-room-key-input" placeholder="e.g., TEAM123"
-                       class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:ring-yellow-500 focus:border-yellow-500 shadow-sm">
+
+            <!-- Create Room Section -->
+            <div id="create-section" class="space-y-4">
+                <div>
+                    <label for="create-room-key-input" class="block text-sm font-medium text-gray-700">Choose a Short Room Code:</label>
+                    <input type="text" id="create-room-key-input" placeholder="e.g., FUNCHAT"
+                           class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:ring-yellow-500 focus:border-yellow-500 shadow-sm">
+                </div>
+                <button onclick="createRoom()" id="create-room-button"
+                        class="w-full px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-150">
+                    Create and Join Room
+                </button>
             </div>
-            <button onclick="startManualChat()" id="start-manual-chat-button"
-                    class="w-full px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-150">
-                Create or Join Room
-            </button>
+            
+            <!-- Join Room Section -->
+            <div id="join-section" class="space-y-4 hidden">
+                <div>
+                    <label for="join-room-key-input" class="block text-sm font-medium text-gray-700">Enter the Shared Room Code:</label>
+                    <input type="text" id="join-room-key-input" placeholder="Ask your friend for their code!"
+                           class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:ring-purple-500 focus:border-purple-500 shadow-sm">
+                </div>
+                <button onclick="joinRoom()" id="join-room-button"
+                        class="w-full px-4 py-2 bg-purple-600 text-white font-semibold rounded-lg shadow-md hover:bg-purple-700 transition duration-150">
+                    Join Existing Room
+                </button>
+            </div>
         </div>
 
 
@@ -137,36 +172,81 @@
             }
         });
     } else {
-        // Fallback for missing config (though Canvas usually provides this)
+        // Fallback for missing config 
         document.getElementById('room-id-display').textContent = 'ERROR';
         document.getElementById('user-id-value').textContent = 'Error';
         displayError("Database connection details are missing. Chat is disabled.");
-        document.getElementById('start-manual-chat-button').disabled = true;
+        document.getElementById('create-room-button').disabled = true;
+        document.getElementById('join-room-button').disabled = true;
     }
 
 
-    // --- Manual Chat Start Function (User Triggered) ---
-    window.startManualChat = function() {
+    // --- UI State Management ---
+    let currentMode = 'create'; 
+
+    window.switchMode = function(mode) {
+        currentMode = mode;
+        const createTab = document.getElementById('tab-create');
+        const joinTab = document.getElementById('tab-join');
+        const createSection = document.getElementById('create-section');
+        const joinSection = document.getElementById('join-section');
+
+        // Reset classes
+        createTab.classList.remove('tab-active', 'text-yellow-800', 'bg-yellow-100');
+        joinTab.classList.remove('tab-active', 'text-yellow-800', 'bg-yellow-100');
+        createTab.classList.add('text-yellow-600');
+        joinTab.classList.add('text-yellow-600');
+
+        if (mode === 'create') {
+            createSection.classList.remove('hidden');
+            joinSection.classList.add('hidden');
+            createTab.classList.add('tab-active', 'text-yellow-800', 'bg-yellow-100');
+        } else {
+            createSection.classList.add('hidden');
+            joinSection.classList.remove('hidden');
+            joinTab.classList.add('tab-active', 'text-yellow-800', 'bg-yellow-100');
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        switchMode('create'); // Set the default view on load
+    });
+
+    // --- Chat Room Creation/Joining Functions ---
+
+    window.createRoom = function() {
+        const roomKeyInput = document.getElementById('create-room-key-input');
+        startChat(roomKeyInput.value.trim());
+    }
+
+    window.joinRoom = function() {
+        const roomKeyInput = document.getElementById('join-room-key-input');
+        startChat(roomKeyInput.value.trim());
+    }
+    
+    // Unified function to handle starting the chat once authenticated and inputs are valid
+    window.startChat = function(roomKey) {
         if (!isFirebaseReady || !auth.currentUser) {
             displayError("Please wait for the app to finish signing in (Your ID status).");
             return;
         }
 
         const nicknameInput = document.getElementById('nickname-input');
-        const roomKeyInput = document.getElementById('manual-room-key-input');
-        
         const nickname = nicknameInput.value.trim();
-        const roomKey = roomKeyInput.value.trim();
-
+        
         if (!nickname || !roomKey) {
-            displayError("Please enter both a Nickname and a Shared Secret Key.");
+            displayError("Please enter both a Nickname and a Shared Secret Key/Room Code.");
+            return;
+        }
+        
+        if (roomKey.length < 3 || roomKey.length > 15) {
+            displayError("Room codes should be between 3 and 15 characters long.");
             return;
         }
 
         userName = nickname;
         // Use the room key directly as the ID, uppercased for consistency
-        // A short code works well as a unique ID.
-        currentRoomId = roomKey.replace(/\s/g, '_').toUpperCase(); 
+        currentRoomId = roomKey.replace(/[^a-zA-Z0-9]/g, '').toUpperCase(); // Clean and standardize the room ID
 
         document.getElementById('config-panel').classList.add('hidden');
         document.getElementById('room-id-display').textContent = currentRoomId;
@@ -183,7 +263,7 @@
     }
 
 
-    // --- Core Functions (IP-related functions removed) ---
+    // --- Core Functions ---
 
     function listenForMessages(roomId) {
         if (!isFirebaseReady || !isChatStarted) return; 
@@ -231,7 +311,6 @@
             const nameColor = isSelf ? 'text-blue-600' : 'text-purple-600';
             const bubbleBg = isSelf ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-800';
             const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now';
-            // Display either the user's current nickname (if self) or the stored nickname
             const displayName = isSelf ? userName : msg.userName || msg.userId.substring(0, 8) + '...';
             
             messageElement.innerHTML = `
