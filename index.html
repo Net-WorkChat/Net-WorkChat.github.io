@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Local Network Chat</title>
+    <title>Private Room Chat</title>
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Use Inter font family -->
@@ -32,10 +32,10 @@
     <div class="bg-white shadow-xl rounded-xl w-full max-w-2xl flex flex-col h-[90vh]">
         <!-- Header -->
         <header class="p-4 border-b border-gray-200 bg-gray-50 rounded-t-xl">
-            <h1 class="text-2xl font-bold text-gray-800">Local Network Chat</h1>
+            <h1 class="text-2xl font-bold text-gray-800">Private Room Chat</h1>
             <p id="network-status" class="text-sm mt-1 text-gray-600">
                 <span class="font-medium text-blue-600">Status: </span>
-                <span id="room-id-display">Detecting network...</span>
+                <span id="room-id-display">Not Joined</span>
             </p>
             <p id="user-id-display" class="text-xs text-gray-500 mt-0.5">
                 <span class="font-medium">Your ID: </span>
@@ -43,22 +43,22 @@
             </p>
         </header>
 
-        <!-- Configuration Input (Shown if Database is unavailable) -->
-        <div id="config-panel" class="p-4 space-y-4 bg-yellow-50 border-b border-yellow-200 hidden">
-            <p class="text-sm text-yellow-800 font-medium">The automatic network detection is having trouble, let's set up a room manually!</p>
+        <!-- Configuration Input (Now the Default Startup) -->
+        <div id="config-panel" class="p-4 space-y-4 bg-yellow-50 border-b border-yellow-200">
+            <p class="text-sm text-yellow-800 font-medium">To start chatting, enter a nickname and a room code!</p>
             <div>
                 <label for="nickname-input" class="block text-sm font-medium text-gray-700">Your Nickname:</label>
                 <input type="text" id="nickname-input" placeholder="e.g., ChatMaster24" value=""
                        class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:ring-yellow-500 focus:border-yellow-500 shadow-sm">
             </div>
             <div>
-                <label for="manual-room-key-input" class="block text-sm font-medium text-gray-700">Shared Secret Key (Room Name):</label>
-                <input type="text" id="manual-room-key-input" placeholder="Everyone must use the SAME key"
+                <label for="manual-room-key-input" class="block text-sm font-medium text-gray-700">Shared Secret Key (Short Room Code):</label>
+                <input type="text" id="manual-room-key-input" placeholder="e.g., TEAM123"
                        class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:ring-yellow-500 focus:border-yellow-500 shadow-sm">
             </div>
             <button onclick="startManualChat()" id="start-manual-chat-button"
-                    class="w-full px-4 py-2 bg-yellow-600 text-white font-semibold rounded-lg shadow-md hover:bg-yellow-700 transition duration-150">
-                Join Chat Room
+                    class="w-full px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-150">
+                Create or Join Room
             </button>
         </div>
 
@@ -67,7 +67,7 @@
         <div id="message-list" class="message-list flex-1 overflow-y-auto p-4 space-y-4">
             <!-- Messages will be injected here -->
             <div id="loading-indicator" class="text-center text-gray-500 pt-8">
-                Loading chat history...
+                Enter a Nickname and a Shared Secret Key to create or join a chat room!
             </div>
         </div>
 
@@ -106,7 +106,7 @@
 
     let app, db, auth;
     let userId = null;
-    let userName = 'Guest'; // Default nickname
+    let userName = 'Guest'; 
     let currentRoomId = null;
     let isFirebaseReady = false; 
     let isChatStarted = false;
@@ -122,9 +122,8 @@
         onAuthStateChanged(auth, async (user) => {
             if (user) {
                 userId = user.uid;
+                // Only display a shortened User ID for privacy/simplicity
                 document.getElementById('user-id-value').textContent = userId.substring(0, 12) + '...';
-                // 2. Once authenticated, try to determine the room automatically
-                await determineRoomAndListen();
             } else {
                 try {
                     if (authToken) {
@@ -134,28 +133,25 @@
                     }
                 } catch (error) {
                     console.error("Firebase sign-in failed:", error);
-                    handleDatabaseUnavailable();
                 }
             }
         });
     } else {
-        handleDatabaseUnavailable();
+        // Fallback for missing config (though Canvas usually provides this)
+        document.getElementById('room-id-display').textContent = 'ERROR';
+        document.getElementById('user-id-value').textContent = 'Error';
+        displayError("Database connection details are missing. Chat is disabled.");
+        document.getElementById('start-manual-chat-button').disabled = true;
     }
 
-    function handleDatabaseUnavailable() {
-        isFirebaseReady = false;
-        isChatStarted = false;
-        document.getElementById('room-id-display').textContent = 'UNAVAILABLE';
-        document.getElementById('user-id-value').textContent = 'Not connected';
-        document.getElementById('loading-indicator').textContent = 'Database connection details are missing. Please enter a Secret Key below to start a manual chat.';
-        document.getElementById('message-input').disabled = true;
-        document.getElementById('send-button').disabled = true;
-        document.getElementById('config-panel').classList.remove('hidden');
-        displayError("Cannot connect to the database. Chat features are disabled until a Secret Key is entered.");
-    }
 
     // --- Manual Chat Start Function (User Triggered) ---
     window.startManualChat = function() {
+        if (!isFirebaseReady || !auth.currentUser) {
+            displayError("Please wait for the app to finish signing in (Your ID status).");
+            return;
+        }
+
         const nicknameInput = document.getElementById('nickname-input');
         const roomKeyInput = document.getElementById('manual-room-key-input');
         
@@ -168,80 +164,26 @@
         }
 
         userName = nickname;
-        currentRoomId = 'MANUAL-' + roomKey.replace(/\s/g, '_').toUpperCase(); // Use a prefix for manual rooms
+        // Use the room key directly as the ID, uppercased for consistency
+        // A short code works well as a unique ID.
+        currentRoomId = roomKey.replace(/\s/g, '_').toUpperCase(); 
 
         document.getElementById('config-panel').classList.add('hidden');
         document.getElementById('room-id-display').textContent = currentRoomId;
         document.getElementById('loading-indicator').classList.add('hidden');
         
-        // This simulates the successful connection and starts the chat UI.
+        // Enable chat UI
         document.getElementById('message-input').disabled = false;
         document.getElementById('send-button').disabled = false;
-        
         isChatStarted = true;
         
         // Start listening to the chat room with the manual ID
-        if (isFirebaseReady && auth.currentUser) {
-            userId = auth.currentUser.uid;
-            document.getElementById('user-id-value').textContent = userId.substring(0, 12) + '...';
-            listenForMessages(currentRoomId);
-            clearError();
-        } else if (isFirebaseReady) {
-            // Need to wait for authentication, which is handled in onAuthStateChanged
-            clearError();
-        } else {
-             // Fallback for when Firebase is completely missing (should be covered by handleDatabaseUnavailable)
-             displayError("Chat requires a connected database. Cannot start manual chat.");
-        }
-    }
-
-
-    // --- Core Functions ---
-
-    async function fetchWithRetry(url, options = {}, maxRetries = 5) {
-        for (let i = 0; i < maxRetries; i++) {
-            try {
-                const response = await fetch(url, options);
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                return await response.json();
-            } catch (error) {
-                console.warn(`Fetch attempt ${i + 1} failed: ${error.message}`);
-                if (i === maxRetries - 1) throw error;
-                const delay = Math.pow(2, i) * 1000;
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        }
-    }
-
-    async function getPublicIP() {
-        try {
-            const data = await fetchWithRetry('https://api64.ipify.org?format=json', { method: 'GET' });
-            return data.ip || 'GLOBAL_LOBBY';
-        } catch (error) {
-            console.error("Failed to fetch public IP:", error);
-            // If IP fetch fails, switch to manual mode
-            handleDatabaseUnavailable();
-            return null; 
-        }
-    }
-
-    async function determineRoomAndListen() {
-        if (!isFirebaseReady) return; // Only run if Firebase is ready
-
-        currentRoomId = await getPublicIP();
-
-        if (!currentRoomId) return; // IP fetch failed, manual setup is now active
-
-        const roomIdDisplay = document.getElementById('room-id-display');
-        roomIdDisplay.textContent = currentRoomId;
-
-        document.getElementById('message-input').disabled = false;
-        document.getElementById('send-button').disabled = false;
-        document.getElementById('loading-indicator').classList.add('hidden');
-        isChatStarted = true;
-
         listenForMessages(currentRoomId);
+        clearError();
     }
+
+
+    // --- Core Functions (IP-related functions removed) ---
 
     function listenForMessages(roomId) {
         if (!isFirebaseReady || !isChatStarted) return; 
@@ -289,6 +231,7 @@
             const nameColor = isSelf ? 'text-blue-600' : 'text-purple-600';
             const bubbleBg = isSelf ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-800';
             const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now';
+            // Display either the user's current nickname (if self) or the stored nickname
             const displayName = isSelf ? userName : msg.userName || msg.userId.substring(0, 8) + '...';
             
             messageElement.innerHTML = `
