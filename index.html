@@ -28,6 +28,13 @@
             border-bottom: 2px solid #f59e0b; /* Yellow-600 */
             color: #b45309; /* Yellow-800 */
         }
+        /* Added specific disabled styles for clarity */
+        .disabled\:bg-purple-400:disabled {
+            background-color: #a78bfa; /* purple-400 */
+        }
+        .disabled\:bg-blue-400:disabled {
+            background-color: #60a5fa; /* blue-400 */
+        }
     </style>
 </head>
 <body>
@@ -43,7 +50,7 @@
             </p>
             <p id="user-id-display" class="text-xs text-gray-500 mt-0.5">
                 <span class="font-medium">Your ID: </span>
-                <span id="user-id-value">Signing in...</span>
+                <span id="user-id-value" class="transition-colors duration-300">Signing in...</span>
             </p>
         </header>
 
@@ -77,8 +84,8 @@
                     <input type="text" id="create-room-key-input" placeholder="e.g., FUNCHAT"
                            class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:ring-yellow-500 focus:border-yellow-500 shadow-sm">
                 </div>
-                <button onclick="createRoom()" id="create-room-button"
-                        class="w-full px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-150">
+                <button onclick="createRoom()" id="create-room-button" disabled
+                        class="w-full px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-150 disabled:bg-blue-400 disabled:cursor-not-allowed">
                     Create and Join Room
                 </button>
             </div>
@@ -90,8 +97,8 @@
                     <input type="text" id="join-room-key-input" placeholder="Ask your friend for their code!"
                            class="mt-1 block w-full p-2 border border-gray-300 rounded-lg focus:ring-purple-500 focus:border-purple-500 shadow-sm">
                 </div>
-                <button onclick="joinRoom()" id="join-room-button"
-                        class="w-full px-4 py-2 bg-purple-600 text-white font-semibold rounded-lg shadow-md hover:bg-purple-700 transition duration-150">
+                <button onclick="joinRoom()" id="join-room-button" disabled
+                        class="w-full px-4 py-2 bg-purple-600 text-white font-semibold rounded-lg shadow-md hover:bg-purple-700 transition duration-150 disabled:bg-purple-400 disabled:cursor-not-allowed">
                     Join Existing Room
                 </button>
             </div>
@@ -145,6 +152,7 @@
     let currentRoomId = null;
     let isFirebaseReady = false; 
     let isChatStarted = false;
+    let isAuthProcessComplete = false; // Flag to track when the initial sign-in attempt has finished
 
     // --- Firebase Initialization ---
     if (Object.keys(firebaseConfig).length > 0) {
@@ -153,24 +161,47 @@
         auth = getAuth(app);
         isFirebaseReady = true;
 
-        // 1. Authentication Setup
-        onAuthStateChanged(auth, async (user) => {
+        // 1. Authentication Setup Listener
+        onAuthStateChanged(auth, (user) => {
+            const userIdDisplay = document.getElementById('user-id-value');
             if (user) {
                 userId = user.uid;
                 // Only display a shortened User ID for privacy/simplicity
-                document.getElementById('user-id-value').textContent = userId.substring(0, 12) + '...';
-            } else {
-                try {
-                    if (authToken) {
-                        await signInWithCustomToken(auth, authToken);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                } catch (error) {
-                    console.error("Firebase sign-in failed:", error);
-                }
+                userIdDisplay.textContent = userId.substring(0, 12) + '...';
+                
+                // Set status color to green (Success)
+                userIdDisplay.classList.remove('text-gray-500', 'text-red-600');
+                userIdDisplay.classList.add('text-green-600');
+            }
+            
+            // If the process has completed and auth is still null (e.g., sign-in failed), mark it red
+            if (isAuthProcessComplete && !user) {
+                userIdDisplay.textContent = 'Failed';
+                userIdDisplay.classList.remove('text-gray-500', 'text-green-600');
+                userIdDisplay.classList.add('text-red-600');
             }
         });
+
+        // 2. Initial Sign-in Attempt and UI enabling
+        async function runInitialAuth() {
+            try {
+                if (authToken) {
+                    await signInWithCustomToken(auth, authToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Initial Firebase sign-in failed:", error);
+            } finally {
+                isAuthProcessComplete = true;
+                // Enable buttons regardless of success, as the auth process is complete.
+                document.getElementById('create-room-button').disabled = false;
+                document.getElementById('join-room-button').disabled = false;
+            }
+        }
+        
+        runInitialAuth();
+
     } else {
         // Fallback for missing config 
         document.getElementById('room-id-display').textContent = 'ERROR';
@@ -226,7 +257,8 @@
     
     // Unified function to handle starting the chat once authenticated and inputs are valid
     window.startChat = function(roomKey) {
-        if (!isFirebaseReady || !auth.currentUser) {
+        // Use userId check, which is set only after successful sign-in
+        if (!isFirebaseReady || !userId) { 
             displayError("Please wait for the app to finish signing in (Your ID status).");
             return;
         }
